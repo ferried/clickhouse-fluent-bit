@@ -9,6 +9,7 @@ import (
 	klog "k8s.io/klog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -119,6 +120,14 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 		readTimeout = DefaultReadTimeout
 	}
 
+	var includeNamespace string
+	if v := os.Getenv("CLICKHOUSE_INCLUDE_NAMESPACE"); v != "" {
+		includeNamespace = v
+	} else {
+		includeNamespace = "*"
+		klog.Infof("you set the default click_house_include_namespace: %s", includeNamespace)
+	}
+
 	dsn := "tcp://" + host + "?username=" + user + "&password=" + password + "&database=" + database + "&write_timeout=" + writeTimeout + "&read_timeout=" + readTimeout
 
 	db, err := sql.Open("clickhouse", dsn)
@@ -176,7 +185,7 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 		if err != nil {
 			break
 		}
-
+		// get log namespace
 		mv, ok := flattenData["kubernetes_namespace_name"]
 		mvv := ""
 		if ok {
@@ -189,8 +198,16 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 				mvv = fmt.Sprintf("%v", mv)
 			}
 		}
-		if mvv == "kube-log" {
-			break
+		// handle filter
+		var includeNamespace string
+		if v := os.Getenv("CLICKHOUSE_INCLUDE_NAMESPACE"); v != "" {
+			if v != "*" {
+				includeNamespace = v
+				namespaces := strings.Split(includeNamespace, ",")
+				if !arrayHasValue(namespaces, mvv) {
+					break
+				}
+			}
 		}
 
 		log := Log{}
@@ -278,4 +295,13 @@ func FLBPluginExit() int {
 }
 
 func main() {
+}
+
+func arrayHasValue(source []string, index string) bool {
+	for _, v := range source {
+		if v == index {
+			return true
+		}
+	}
+	return false
 }
